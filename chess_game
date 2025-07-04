@@ -1,0 +1,255 @@
+# Complete Chess Game using Python and Pygame with Menu, Restart, Sound, Player Names, and Undo
+
+import pygame
+import sys
+import chess
+import chess.engine
+
+WIDTH, HEIGHT = 640, 700
+ROWS, COLS = 8, 8
+SQUARE_SIZE = WIDTH // COLS
+
+WHITE = (232, 235, 239)
+GRAY = (125, 135, 150)
+HIGHLIGHT = (246, 246, 105)
+BUTTON_COLOR = (70, 130, 180)
+BUTTON_HOVER = (100, 160, 210)
+
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Python Chess")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont("Arial", 24)
+title_font = pygame.font.SysFont("Arial", 32, bold=True)
+
+# Load sounds
+move_sound = pygame.mixer.Sound("assets/sounds/move.wav")
+check_sound = pygame.mixer.Sound("assets/sounds/capture.wav")
+
+
+# Load piece images
+PIECES = {}
+for piece in ["r", "n", "b", "q", "k", "p", "R", "N", "B", "Q", "K", "P"]:
+    PIECES[piece] = pygame.transform.scale(
+        pygame.image.load(f"assets/{piece}.png"), (SQUARE_SIZE, SQUARE_SIZE))
+
+board = chess.Board()
+selected_square = None
+vs_ai = False
+ai_level = 1
+in_menu = True
+winner = None
+
+# Set up AI engine
+engine = None
+try:
+    engine = chess.engine.SimpleEngine.popen_uci("stockfish")
+except:
+    print("Stockfish engine not found. AI disabled.")
+
+move_stack = []
+
+
+def draw_button(text, x, y, w, h, action=None):
+    mouse = pygame.mouse.get_pos()
+    click = pygame.mouse.get_pressed()
+    color = BUTTON_HOVER if x + w > mouse[0] > x and y + h > mouse[1] > y else BUTTON_COLOR
+    pygame.draw.rect(screen, color, (x, y, w, h))
+    label = font.render(text, True, (255, 255, 255))
+    screen.blit(label, (x + (w - label.get_width()) // 2, y + (h - label.get_height()) // 2))
+    if click[0] and x + w > mouse[0] > x and y + h > mouse[1] > y:
+        pygame.time.delay(200)
+        return True
+    return False
+
+
+def draw_board():
+    for row in range(ROWS):
+        for col in range(COLS):
+            color = WHITE if (row + col) % 2 == 0 else GRAY
+            pygame.draw.rect(screen, color, (col*SQUARE_SIZE, row*SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE))
+
+
+def draw_pieces():
+    for square in chess.SQUARES:
+        piece = board.piece_at(square)
+        if piece:
+            row = 7 - (square // 8)
+            col = square % 8
+            screen.blit(PIECES[piece.symbol()], (col*SQUARE_SIZE, row*SQUARE_SIZE))
+
+
+def get_square_under_mouse():
+    mouse_x, mouse_y = pygame.mouse.get_pos()
+    row = 7 - (mouse_y // SQUARE_SIZE)
+    col = mouse_x // SQUARE_SIZE
+    return chess.square(col, row)
+
+
+def highlight_square(square):
+    row = 7 - (square // 8)
+    col = square % 8
+    pygame.draw.rect(screen, HIGHLIGHT, (col*SQUARE_SIZE, row*SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE))
+
+
+def ai_move():
+    global board, winner
+    if engine:
+        result = engine.play(board, chess.engine.Limit(time=0.1 * ai_level))
+        board.push(result.move)
+        move_stack.append(result.move)
+        if board.is_checkmate():
+            checkmate_sound.play()
+            winner = "White" if board.turn else "Black"
+        elif board.is_check():
+            check_sound.play()
+        else:
+            move_sound.play()
+
+
+def draw_status():
+    status = "White to move" if board.turn else "Black to move"
+    player_text = title_font.render(status, True, (0, 0, 0))
+    screen.blit(player_text, (WIDTH // 2 - player_text.get_width() // 2, HEIGHT - 90))
+
+    status_note = ""
+    if board.is_check():
+        status_note = "Check!"
+    if board.is_checkmate():
+        status_note = "Checkmate! " + ("Black wins" if board.turn else "White wins")
+    elif board.is_stalemate():
+        status_note = "Stalemate"
+    if status_note:
+        note = font.render(status_note, True, (255, 0, 0))
+        screen.blit(note, (WIDTH // 2 - note.get_width() // 2, HEIGHT - 60))
+
+
+def draw_victory():
+    screen.fill((0, 0, 0))
+    msg = font.render(f"{winner} wins by checkmate!", True, (255, 255, 255))
+    screen.blit(msg, (WIDTH//2 - msg.get_width()//2, HEIGHT//2 - 40))
+    if draw_button("Play Again", WIDTH//2 - 80, HEIGHT//2, 160, 40):
+        reset_game()
+        return False
+    return True
+
+
+def draw_menu():
+    screen.fill((0, 0, 0))
+    if draw_button("Single Player (AI)", WIDTH//2 - 120, 200, 240, 50):
+        return 'single'
+    if draw_button("Two Player", WIDTH//2 - 120, 270, 240, 50):
+        return 'multi'
+    if draw_button("AI Difficulty: Easy", WIDTH//2 - 120, 350, 240, 40):
+        return 'easy'
+    if draw_button("AI Difficulty: Normal", WIDTH//2 - 120, 400, 240, 40):
+        return 'normal'
+    if draw_button("AI Difficulty: Hard", WIDTH//2 - 120, 450, 240, 40):
+        return 'hard'
+    pygame.display.flip()
+    return None
+
+
+def reset_game():
+    global board, selected_square, winner, move_stack
+    board.reset()
+    selected_square = None
+    winner = None
+    move_stack.clear()
+
+
+def undo_move():
+    if len(move_stack) > 0:
+        board.pop()
+        move_stack.pop()
+        if vs_ai and len(move_stack) > 0:
+            board.pop()
+            move_stack.pop()
+
+
+def main():
+    global selected_square, vs_ai, ai_level, in_menu, winner
+    running = True
+    while running:
+        if in_menu:
+            selection = draw_menu()
+            if selection == 'single':
+                vs_ai = True
+                in_menu = False
+            elif selection == 'multi':
+                vs_ai = False
+                in_menu = False
+            elif selection == 'easy':
+                ai_level = 1
+            elif selection == 'normal':
+                ai_level = 2
+            elif selection == 'hard':
+                ai_level = 3
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+            continue
+
+        if winner:
+            in_menu = draw_victory()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+            continue
+
+        screen.fill((0, 0, 0))
+        draw_board()
+        draw_pieces()
+        draw_status()
+
+        if draw_button("Undo", WIDTH - 100, 10, 80, 30):
+            undo_move()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+                break
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    reset_game()
+                elif event.key == pygame.K_u:
+                    undo_move()
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                square = get_square_under_mouse()
+                if selected_square is None:
+                    if board.piece_at(square) and board.piece_at(square).color == board.turn:
+                        selected_square = square
+                else:
+                    move = chess.Move(selected_square, square)
+                    if move in board.legal_moves:
+                        board.push(move)
+                        move_stack.append(move)
+                        if board.is_checkmate():
+                            checkmate_sound.play()
+                            winner = "Black" if board.turn else "White"
+                        elif board.is_check():
+                            check_sound.play()
+                        else:
+                            move_sound.play()
+                        selected_square = None
+                        if vs_ai and not board.turn and not winner:
+                            ai_move()
+                    else:
+                        selected_square = None
+
+        if selected_square is not None:
+            highlight_square(selected_square)
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    if engine:
+        engine.quit()
+    pygame.quit()
+    sys.exit()
+
+
+if __name__ == "__main__":
+    main()
